@@ -1,0 +1,65 @@
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+  }
+
+  environment {
+    IMAGE_NAME = 'nexvion'
+    IMAGE_TAG  = "${env.BUILD_NUMBER}"
+    HOST_PORT  = '8082'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh 'git log -1 --oneline'
+      }
+    }
+
+    stage('Validate') {
+      steps {
+        sh '''
+          test -f application/index.html
+          test -f application/products.html
+          test -f application/payment.html
+          for f in scripts/*.sh; do bash -n "$f"; done
+        '''
+      }
+    }
+
+    stage('Docker Build') {
+      steps {
+        sh 'docker build -f docker/Dockerfile -t ${IMAGE_NAME}:${IMAGE_TAG} -t ${IMAGE_NAME}:latest .'
+      }
+    }
+
+    stage('Deploy') {
+      steps {
+        sh '''
+          docker rm -f nexvion-ci || true
+          docker run -d --name nexvion-ci -p ${HOST_PORT}:8080 ${IMAGE_NAME}:${IMAGE_TAG}
+        '''
+      }
+    }
+
+    stage('Health Check') {
+      steps {
+        sh './scripts/health-check.sh http://localhost:${HOST_PORT}/health 15 2'
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "Deployment success: ${IMAGE_NAME}:${IMAGE_TAG} on port ${HOST_PORT}"
+    }
+    failure {
+      echo 'Pipeline failed'
+      sh 'docker logs nexvion-ci || true'
+    }
+  }
+}
